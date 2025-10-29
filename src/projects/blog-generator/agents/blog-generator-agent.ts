@@ -95,7 +95,10 @@ After EACH agent completes:
     contentWriter
   ],
   canDelegateTo: () => [
-    urlToMarkdown
+    urlToMarkdown,
+    qualificationAgent,
+    contentStrategistAgent,
+    contentWriter
   ]
 });
 
@@ -135,8 +138,13 @@ const urlToMarkdown = subAgent({
 - Keep markdown clean and publication-ready
 - Clearly label and separate each source
 - Provide a summary of what was scraped and any issues encountered
+
+**WHEN COMPLETE:**
+- After successfully scraping content, IMMEDIATELY transfer back to the orchestrator
+- Use the transfer tool to hand off control so the workflow can continue to Step 2
 `,
-  canUse: () => [firecrawlMcpTool]
+  canUse: () => [firecrawlMcpTool],
+  canTransferTo: () => [orchestrator]
 });
 
 // ============================================================================
@@ -176,7 +184,12 @@ const qualificationAgent = subAgent({
 - Ensure all requirements are clearly understood
 - Flag quality issues with source material
 - Provide clear guidance for downstream agents
-`
+
+**WHEN COMPLETE:**
+- After gathering requirements and creating the brief, IMMEDIATELY transfer back to the orchestrator
+- Use the transfer tool to hand off control so the workflow can continue to Step 3
+`,
+  canTransferTo: () => [orchestrator]
 });
 
 // ============================================================================
@@ -223,7 +236,12 @@ const contentStrategistAgent = subAgent({
 - Maintain alignment with user intent from intake brief
 - Follow Smart Brevity structure exactly
 - Include specific data points and statistics with sources
-`
+
+**WHEN COMPLETE:**
+- After creating the strategic outline, IMMEDIATELY transfer back to the orchestrator
+- Use the transfer tool to hand off control so the workflow can continue to Step 4
+`,
+  canTransferTo: () => [orchestrator]
 });
 
 // ============================================================================
