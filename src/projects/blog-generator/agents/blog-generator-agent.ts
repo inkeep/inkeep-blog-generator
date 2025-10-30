@@ -122,14 +122,11 @@ const urlToMarkdown = subAgent({
 - Format each source clearly with its original URL and title
 
 **Artifact Creation (CRITICAL):**
-- For EACH successfully scraped URL, create a "scraped_page" artifact containing:
-  * title: The page title
-  * url: The source URL
-  * wordCount: Total word count
-  * markdown: Full markdown content
-  * extractedAt: Current ISO timestamp
-  * status: "success", "partial", or "failed"
+- For EACH successfully scraped URL, create a "scraped_page" artifact
+- The artifact will automatically capture the COMPLETE Firecrawl tool response
+- This includes all metadata, markdown content, URLs, titles, and scraping status
 - These artifacts will be used by downstream agents (contentStrategist, contentWriter) for citation and analysis
+- The agent can access any field from the Firecrawl response when creating citations
 
 **Error Handling:**
 - If a URL is invalid, skip it and continue with others
@@ -213,8 +210,8 @@ const contentStrategistAgent = subAgent({
 
 **Your Task:**
 - Analyze the intake brief from the Qualification agent (user intent, target audience, tone)
-- Review the scraped_page artifacts from the URL-to-Markdown agent
-- Extract key facts, statistics, and quotable insights
+- Review the scraped_page artifacts from the URL-to-Markdown agent (contains complete Firecrawl responses)
+- Extract key facts, statistics, and quotable insights from the scraped content
 - Create a strategic outline following Smart Brevity principles
 - **CREATE ARTIFACTS:** Create citation artifacts for all sources and a strategic_outline artifact
 
@@ -298,7 +295,7 @@ const contentWriter = subAgent({
 **Artifact Usage (CRITICAL):**
 - **strategic_outline artifact:** Contains the complete outline, evidenceMap, and citation IDs
 - **citation artifacts:** Contains source material for each claim (reference by ID from evidenceMap)
-- **scraped_page artifacts:** Original source material if you need additional context
+- **scraped_page artifacts:** Complete Firecrawl responses with all original source material if you need additional context
 - Use the evidenceMap to ensure EVERY claim is properly cited with the correct citation artifact
 - Reference citation artifacts by their IDs when adding inline citations
 

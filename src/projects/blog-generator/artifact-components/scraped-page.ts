@@ -1,33 +1,26 @@
 import { artifactComponent } from '@inkeep/agents-sdk';
-import { z } from 'zod';
-import { preview } from '@inkeep/agents-core';
 
 /**
  * Scraped Page Artifact Component
  * 
- * Stores the complete result of web scraping operations from Firecrawl.
+ * Stores the COMPLETE result of web scraping operations from Firecrawl MCP.
  * Created by urlToMarkdown agent when scraping URLs.
  * Used by contentStrategistAgent and contentWriter to reference original source material.
  * 
- * This artifact captures the tool result from Firecrawl MCP, making it available
- * to downstream agents for analysis and citation.
+ * IMPORTANT: This artifact has NO schema (props omitted) to ensure it captures
+ * the entire Firecrawl tool response regardless of structure. This prevents
+ * data loss from schema mismatches with the MCP tool output.
+ * 
+ * The agent can access all fields from the Firecrawl response including:
+ * - markdown content
+ * - metadata (title, URL, etc.)
+ * - scraping status
+ * - any additional fields Firecrawl provides
  */
 export const scrapedPage = artifactComponent({
   id: "scraped_page",
   name: "scraped_page",
-  description: "Scraped webpage content with metadata from Firecrawl",
-  props: z.object({
-    title: preview(z.string().describe("Page title extracted from the webpage")),
-    url: preview(z.string().describe("Source URL that was scraped")),
-    wordCount: preview(z.number().describe("Total word count of the content")),
-    markdown: z.string().describe("Full markdown-formatted content from the page"),
-    extractedAt: preview(
-      z.string().describe("ISO timestamp when the page was scraped")
-    ),
-    status: preview(
-      z.enum(["success", "partial", "failed"])
-        .describe("Scraping status indicator")
-    )
-  })
+  description: "Complete Firecrawl scraping result with all metadata and content"
+  // NO props - saves entire tool result without filtering
 });
 
