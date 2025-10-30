@@ -1,5 +1,6 @@
 import { agent, subAgent } from '@inkeep/agents-sdk';
 import { firecrawlMcpTool } from '../tools/firecrawl-mcp';
+import { citation, scrapedPage, strategicOutline } from '../artifact-components';
 
 /**
  * Blog Generator Agent
@@ -112,12 +113,23 @@ const urlToMarkdown = subAgent({
 - Convert content to clean, well-formatted markdown
 - Preserve: headings, paragraphs, lists, links, code blocks, images, tables, blockquotes
 - Process all URLs sequentially
+- **CREATE ARTIFACTS:** For each successfully scraped URL, create a "scraped_page" artifact to store the content
 
 **What to Output:**
 - Provide the consolidated markdown content from all scraped URLs
 - Include metadata about the sources (which URLs were scraped)
 - Clearly separate each URL's content with headers and dividers
 - Format each source clearly with its original URL and title
+
+**Artifact Creation (CRITICAL):**
+- For EACH successfully scraped URL, create a "scraped_page" artifact containing:
+  * title: The page title
+  * url: The source URL
+  * wordCount: Total word count
+  * markdown: Full markdown content
+  * extractedAt: Current ISO timestamp
+  * status: "success", "partial", or "failed"
+- These artifacts will be used by downstream agents (contentStrategist, contentWriter) for citation and analysis
 
 **Error Handling:**
 - If a URL is invalid, skip it and continue with others
@@ -132,12 +144,14 @@ const urlToMarkdown = subAgent({
 - Keep markdown clean and publication-ready
 - Clearly label and separate each source
 - Provide a summary of what was scraped and any issues encountered
+- **ALWAYS create scraped_page artifacts for successful scrapes**
 
 **WHEN COMPLETE:**
-- After successfully scraping content, IMMEDIATELY delegate back to the orchestrator
+- After successfully scraping content and creating artifacts, IMMEDIATELY delegate back to the orchestrator
 - Use delegation to hand off control so the workflow can continue to Step 2
 `,
   canUse: () => [firecrawlMcpTool],
+  artifactComponents: () => [scrapedPage],
   canDelegateTo: () => [orchestrator]
 });
 
@@ -199,9 +213,10 @@ const contentStrategistAgent = subAgent({
 
 **Your Task:**
 - Analyze the intake brief from the Qualification agent (user intent, target audience, tone)
-- Review the source material from the URL-to-Markdown agent
+- Review the scraped_page artifacts from the URL-to-Markdown agent
 - Extract key facts, statistics, and quotable insights
 - Create a strategic outline following Smart Brevity principles
+- **CREATE ARTIFACTS:** Create citation artifacts for all sources and a strategic_outline artifact
 
 **Smart Brevity Paths - Choose One:**
 - **Path A:** How-to/Playbook - Step-by-step guides and actionable instructions
@@ -224,17 +239,41 @@ const contentStrategistAgent = subAgent({
 - Evidence map showing which claims come from which sources
 - Key quotes from the material with proper attribution
 
+**Artifact Creation (CRITICAL):**
+
+1. **Citation Artifacts:** For EACH source or claim you reference, create a "citation" artifact:
+   * title: Title of the source or claim
+   * url: Source URL (from scraped_page artifacts)
+   * sourceType: "webpage", "statistic", "quote", "data", or "research"
+   * content: Relevant excerpt or full content
+   * relevance: How this relates to the claim
+   * extractedAt: Current ISO timestamp
+
+2. **Strategic Outline Artifact:** Create ONE "strategic_outline" artifact containing:
+   * title: SEO-optimized blog title
+   * metaDescription: Meta description
+   * path: Smart Brevity path chosen (use enum values: "how-to", "data-analysis", "case-study", "opinion", "product-launch", "trend-brief")
+   * targetWordCount: Target word count
+   * primaryKeyword: Primary SEO keyword
+   * outline: Complete outline text
+   * evidenceMap: Array linking claims to citation artifact IDs
+   * keyQuotes: Array of quotes with citation artifact IDs
+   * createdAt: Current ISO timestamp
+
 **Critical Rules:**
-- EVERY claim MUST have a citation from provided sources
+- EVERY claim MUST have a citation artifact created
 - NO unsupported statements or assumptions
 - Maintain alignment with user intent from intake brief
 - Follow Smart Brevity structure exactly
 - Include specific data points and statistics with sources
+- **CREATE citation artifacts BEFORE referencing them in the strategic_outline artifact**
+- Store citation artifact IDs in the evidenceMap for traceability
 
 **WHEN COMPLETE:**
-- After creating the strategic outline, IMMEDIATELY delegate back to the orchestrator
+- After creating all artifacts and the strategic outline, IMMEDIATELY delegate back to the orchestrator
 - Use delegation to hand off control so the workflow can continue to Step 4
 `,
+  artifactComponents: () => [citation, strategicOutline],
   canDelegateTo: () => [orchestrator]
 });
 
@@ -251,9 +290,17 @@ const contentWriter = subAgent({
 
 **Your Task:**
 - Review user intent and requirements from the intake brief (Qualification agent)
-- Study the strategic outline structure (Content Strategist agent)
-- Cross-reference source material for factual accuracy and citations
+- Study the strategic_outline artifact (Content Strategist agent)
+- Reference citation artifacts for factual accuracy and proper attribution
+- Use the evidenceMap from strategic_outline to link claims to citation artifacts
 - Write a polished, reader-ready blog article under 1,000 words
+
+**Artifact Usage (CRITICAL):**
+- **strategic_outline artifact:** Contains the complete outline, evidenceMap, and citation IDs
+- **citation artifacts:** Contains source material for each claim (reference by ID from evidenceMap)
+- **scraped_page artifacts:** Original source material if you need additional context
+- Use the evidenceMap to ensure EVERY claim is properly cited with the correct citation artifact
+- Reference citation artifacts by their IDs when adding inline citations
 
 **Writing Guidelines:**
 - **Word limit:** Under 1,000 words (STRICT LIMIT)
@@ -277,25 +324,32 @@ const contentWriter = subAgent({
 - Active voice throughout
 - Plain language (explain acronyms once)
 - Specific over general (e.g., "3 hours" not "time-saving")
-- Evidence-based with inline citations
+- Evidence-based with inline citations (reference citation artifacts)
 - Mobile-optimized (short blocks, clear formatting)
+
+**Citation Format:**
+- Use inline citations referencing the citation artifacts
+- Format: [Source Title](URL) or numbered citations [1], [2], etc.
+- Ensure every claim matches the evidenceMap from strategic_outline artifact
 
 **Output:**
 - Publication-ready article with:
-  * Frontmatter: title, meta description, keywords, word count
+  * Frontmatter: title, meta description, keywords, word count, publication date
   * Engaging lead paragraph
   * Body following outline structure
-  * Source citations inline
+  * Source citations inline (linked to citation artifacts)
   * Clear call-to-action
+  * References section listing all citation artifacts used
 
 **Quality Checklist:**
 - Under 1,000 words
-- Every claim has a source
-- Follows assigned Smart Brevity path
+- Every claim has a citation artifact reference
+- Follows assigned Smart Brevity path from strategic_outline
 - Clear CTA included
 - Matches user intent from brief
 - Bold lead-ins used for sections
 - Authoritative, reporter's tone
+- All citations traceable to citation artifacts
 `
 });
 
@@ -306,7 +360,7 @@ const contentWriter = subAgent({
 export const blogGeneratorAgent = agent({
   id: 'blog-generator',
   name: 'Blog Generator',
-  description: 'Sequential 5-agent workflow that transforms URLs or source material into publication-ready blog articles following Smart Brevity framework',
+  description: 'Sequential 5-agent workflow that transforms URLs or source material into publication-ready blog articles following Smart Brevity framework with full citation tracking',
   defaultSubAgent: orchestrator,
   subAgents: () => [
     orchestrator,
