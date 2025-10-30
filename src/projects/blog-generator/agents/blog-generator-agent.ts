@@ -28,7 +28,7 @@ const orchestrator = subAgent({
 
 **Core Responsibilities:**
 1. Accept user requests for blog creation (URL-based or traditional)
-2. Sequentially transfer to specialized agents in this exact order:
+2. Sequentially delegate to specialized agents in this exact order:
    - **02-url-to-markdown** (if URLs provided)
    - **03-Qualification-Agent** (gather requirements)
    - **04-Content-Strategist-Agent** (create outline)
@@ -45,26 +45,26 @@ const orchestrator = subAgent({
 - If scraping fails completely, halt and report error to user
 
 **Step 2: Requirements Gathering**
-- Transfer to **03-Qualification-Agent** to gather requirements
+- Delegate to **03-Qualification-Agent** to gather requirements
 - This agent will review source material and ask user questions
 - Key questions: What kind of blog? Who is the target audience? Desired tone?
 - **IMPORTANT:** After 03-Qualification-Agent completes, IMMEDIATELY proceed to Step 3
 
 **Step 3: Strategic Planning**
-- Transfer to **04-Content-Strategist-Agent** to create outline
+- Delegate to **04-Content-Strategist-Agent** to create outline
 - This agent will analyze requirements and source material
 - Creates strategic outline following Smart Brevity framework
 - **IMPORTANT:** After 04-Content-Strategist-Agent completes, IMMEDIATELY proceed to Step 4
 
 **Step 4: Final Writing**
-- Transfer to **05-content-writer** to write the article
+- Delegate to **05-content-writer** to write the article
 - This agent will write the publication-ready article
 - Uses intake brief, outline, and source material
 - Produces final article under 1,000 words
 - **THIS IS THE FINAL STEP** - Present article to user when complete
 
 **Critical Workflow Rules:**
-- **SEQUENTIAL ONLY:** Do NOT transfer to multiple agents at once
+- **SEQUENTIAL ONLY:** Do NOT delegate to multiple agents at once
 - **AUTO-CONTINUE:** When an agent completes, AUTOMATICALLY move to the next step
 - **DO NOT STOP:** Do not wait for user input between agents - keep the workflow moving
 - **VALIDATE OUTPUTS:** Confirm each agent provided their deliverable before continuing
@@ -80,7 +80,7 @@ const orchestrator = subAgent({
 After EACH agent completes:
 1. Acknowledge what was completed
 2. Briefly show the output/result
-3. IMMEDIATELY transfer to the next agent in sequence
+3. IMMEDIATELY delegate to the next agent in sequence
 4. Do NOT stop and wait for user - keep the chain moving
 
 **After Final Completion (Step 4 only):**
@@ -88,12 +88,6 @@ After EACH agent completes:
 - Highlight key decisions made by each agent
 - Present the final article to the user
 `,
-  canTransferTo: () => [
-    qualificationAgent,
-    urlToMarkdown,
-    contentStrategistAgent,
-    contentWriter
-  ],
   canDelegateTo: () => [
     urlToMarkdown,
     qualificationAgent,
@@ -140,11 +134,11 @@ const urlToMarkdown = subAgent({
 - Provide a summary of what was scraped and any issues encountered
 
 **WHEN COMPLETE:**
-- After successfully scraping content, IMMEDIATELY transfer back to the orchestrator
-- Use the transfer tool to hand off control so the workflow can continue to Step 2
+- After successfully scraping content, IMMEDIATELY delegate back to the orchestrator
+- Use delegation to hand off control so the workflow can continue to Step 2
 `,
   canUse: () => [firecrawlMcpTool],
-  canTransferTo: () => [orchestrator]
+  canDelegateTo: () => [orchestrator]
 });
 
 // ============================================================================
@@ -186,10 +180,10 @@ const qualificationAgent = subAgent({
 - Provide clear guidance for downstream agents
 
 **WHEN COMPLETE:**
-- After gathering requirements and creating the brief, IMMEDIATELY transfer back to the orchestrator
-- Use the transfer tool to hand off control so the workflow can continue to Step 3
+- After gathering requirements and creating the brief, IMMEDIATELY delegate back to the orchestrator
+- Use delegation to hand off control so the workflow can continue to Step 3
 `,
-  canTransferTo: () => [orchestrator]
+  canDelegateTo: () => [orchestrator]
 });
 
 // ============================================================================
@@ -238,10 +232,10 @@ const contentStrategistAgent = subAgent({
 - Include specific data points and statistics with sources
 
 **WHEN COMPLETE:**
-- After creating the strategic outline, IMMEDIATELY transfer back to the orchestrator
-- Use the transfer tool to hand off control so the workflow can continue to Step 4
+- After creating the strategic outline, IMMEDIATELY delegate back to the orchestrator
+- Use delegation to hand off control so the workflow can continue to Step 4
 `,
-  canTransferTo: () => [orchestrator]
+  canDelegateTo: () => [orchestrator]
 });
 
 // ============================================================================
