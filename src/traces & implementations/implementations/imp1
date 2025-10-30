@@ -1,0 +1,836 @@
+# 🛠️ PHASED IMPLEMENTATION PLAN
+## Fixing Blog Generator Multi-Agent System
+
+---
+
+## 📋 PHASE 1: CRITICAL FIXES (Do First)
+**Estimated Time:** 2-3 hours  
+**Risk:** High - System broken until fixed
+
+### **1.1 Fix Schema-less Artifact Creation**
+
+**Problem:** Agent trying to extract fields from schema-less artifact
+
+**Files to modify:**
+- `my-agent-directory/src/projects/blog-generator/agents/blog-generator-agent.ts`
+
+**Changes needed:**
+
+```typescript
+// In urlToMarkdown agent prompt - BEFORE:
+"""
+After scraping, create a scraped_page artifact:
+<artifact:create 
+  type="scraped_page" 
+  base="result.content[0]" 
+  details='{
+    "type":"type",
+    "markdown":"text.markdown",
+    "title":"text.metadata.title",
+    ...
+  }'
+/>
+"""
+
+// AFTER:
+"""
+After scraping with Firecrawl, create a scraped_page artifact that captures the COMPLETE tool response:
+
+<artifact:create 
+  type="scraped_page" 
+  base="result"
+/>
+
+Note: Since scraped_page has no schema, this saves the ENTIRE Firecrawl response object without filtering. 
+Downstream agents can access the full response including:
+- result.markdown (main content)
+- result.metadata (title, URL, status, etc.)
+- result.success (boolean)
+- All other Firecrawl response fields
+
+Inform the orchestrator: "Scraped [URL] successfully. Complete Firecrawl response saved as artifact [artifact_id]."
+"""
+```
+
+**Validation:**
+```bash
+cd my-agent-directory
+inkeep push --project src/projects/blog-generator
+# Test with a URL and verify artifact contains full Firecrawl response
+```
+
+---
+
+### **1.2 Resolve Orchestrator vs Qualification Agent Contradiction**
+
+**Problem:** Orchestrator says "don't wait for user input" but Qualification Agent asks questions
+
+**Decision Required:** Choose ONE approach:
+- **Option A:** Fully automated (no user input mid-workflow)
+- **Option B:** Interactive (allow user input at qualification stage)
+
+#### **Option A: Fully Automated** (Recommended for production)
+
+**Changes to Orchestrator:**
+```typescript
+const orchestrator = subAgent({
+  id: 'orchestrator',
+  name: 'Orchestrator',
+  description: `Sequential workflow manager...`,
+  prompt: `
+You are the Orchestrator for a fully automated blog generation pipeline.
+
+WORKFLOW SEQUENCE:
+1. URL to Markdown (scraping)
+2. Qualification (automated with smart defaults)
+3. Content Strategist (outline creation)
+4. Content Writer (final article)
+
+CRITICAL RULES:
+- This is a FULLY AUTOMATED workflow
+- Do NOT wait for user input between agents
+- Each delegation should complete autonomously
+- Monitor progress and handle errors
+- Provide status updates to user at each major step
+
+When delegating to Qualification Agent:
+- Pass the scraped_page artifact ID
+- Instruct it to proceed with smart defaults
+- Do not allow it to pause for questions
+  `,
+  // ... rest of config
+});
+```
+
+**Changes to Qualification Agent:**
+```typescript
+const qualificationAgent = subAgent({
+  id: 'qualification',
+  name: 'Qualification Agent',
+  description: `Analyzes scraped content and determines optimal blog strategy`,
+  prompt: `
+You analyze scraped content and determine the optimal Smart Brevity path AUTONOMOUSLY.
+
+AVAILABLE scraped_page ARTIFACTS:
+${artifactReference('scraped_page')}
+
+TASK:
+1. Retrieve and analyze the scraped_page artifact
+2. Determine content type (how-to, data-analysis, case-study, opinion, product-launch, trend-brief)
+3. Estimate target word count based on content complexity
+4. Identify primary topic and angle
+5. Make decisions using smart defaults - DO NOT ask questions
+
+SMART DEFAULTS:
+- If technical content → "how-to" path, 1200-1500 words
+- If data-heavy → "data-analysis" path, 1000-1400 words
+- If story-based → "case-study" path, 1400-1800 words
+- If opinion/editorial → "opinion" path, 800-1200 words
+- If new feature/tool → "product-launch" path, 1000-1300 words
+- If industry trend → "trend-brief" path, 900-1200 words
+
+OUTPUT FORMAT:
+Return your analysis as:
+{
+  "path": "how-to",
+  "targetWordCount": 1200,
+  "primaryTopic": "...",
+  "angle": "...",
+  "rationale": "..."
+}
+
+Report back to orchestrator: "Qualification complete: [path] | [wordCount] words | Topic: [topic]"
+  `,
+  tools: () => [firecrawlMcpTool],
+  artifactComponents: () => [citation, scrapedPage],
+  canDelegateTo: () => []
+});
+```
+
+#### **Option B: Interactive** (Better for user control)
+
+**Changes to Orchestrator:**
+```typescript
+const orchestrator = subAgent({
+  id: 'orchestrator',
+  name: 'Orchestrator',
+  description: `Interactive workflow manager...`,
+  prompt: `
+You are the Orchestrator for an interactive blog generation workflow.
+
+WORKFLOW SEQUENCE:
+1. URL to Markdown (automated)
+2. Qualification (PAUSES for user input)
+3. Content Strategist (automated after user confirmation)
+4. Content Writer (automated)
+
+STAGE-SPECIFIC RULES:
+- Stages 1: Auto-continue immediately
+- Stage 2: WAIT for user input after qualification questions
+- Stages 3-4: Auto-continue after user provides answers
+
+USER INTERACTION POINTS:
+- After qualification agent asks questions → STOP and wait
+- After user answers → Resume with strategy and writing phases
+  `,
+  // ... rest of config
+});
+```
+
+**Validation:**
+- Option A: Run full workflow without any user interaction
+- Option B: Verify workflow pauses at qualification, then continues after user input
+
+---
+
+## 📋 PHASE 2: ARTIFACT RETRIEVAL MECHANICS (Do Second)
+**Estimated Time:** 3-4 hours  
+**Risk:** Medium - Artifacts not being used effectively
+
+### **2.1 Add Explicit Artifact Retrieval Instructions**
+
+**Problem:** Downstream agents aren't fetching artifact content
+
+**Files to modify:**
+- `my-agent-directory/src/projects/blog-generator/agents/blog-generator-agent.ts`
+
+**Changes to Content Strategist Agent:**
+
+```typescript
+const contentStrategistAgent = subAgent({
+  id: 'content-strategist',
+  name: 'Content Strategist',
+  description: `Creates strategic outline with Smart Brevity structure and evidence mapping`,
+  prompt: `
+You create strategic blog outlines following Smart Brevity principles.
+
+STEP 1: RETRIEVE ARTIFACTS
+First, fetch all available artifacts:
+
+AVAILABLE scraped_page ARTIFACTS:
+${artifactReference('scraped_page')}
+
+You MUST retrieve the scraped_page artifact to access:
+- result.markdown (full content)
+- result.metadata.title (page title)
+- result.metadata.url (source URL)
+- result.metadata.ogDescription (meta description)
+
+STEP 2: EXTRACT CITATIONS
+As you analyze the content, create citation artifacts for:
+- Statistics or data points
+- Quotes from experts
+- Research findings
+- Product features
+- Industry trends
+
+<artifact:create 
+  type="citation" 
+  base="extracted_data"
+  details='{
+    "title": "source.title",
+    "url": "source.url",
+    "sourceType": "webpage|statistic|quote|data|research",
+    "content": "relevant.excerpt",
+    "relevance": "how.this.relates",
+    "extractedAt": "ISO.timestamp"
+  }'
+/>
+
+STEP 3: CREATE STRATEGIC OUTLINE
+Build the outline and create a strategic_outline artifact:
+
+<artifact:create 
+  type="strategic_outline" 
+  base="your_outline"
+  details='{
+    "title": "SEO.title",
+    "metaDescription": "meta.description",
+    "path": "smart-brevity-path",
+    "targetWordCount": 1200,
+    "primaryKeyword": "main.keyword",
+    "outline": "full.outline.markdown",
+    "evidenceMap": [
+      {
+        "claim": "The claim being made",
+        "citationIds": ["citation-artifact-id-1", "citation-artifact-id-2"],
+        "section": "Which outline section"
+      }
+    ],
+    "keyQuotes": [
+      {
+        "quote": "The quote text",
+        "citationId": "citation-artifact-id"
+      }
+    ],
+    "createdAt": "ISO.timestamp"
+  }'
+/>
+
+STEP 4: REPORT COMPLETION
+Tell orchestrator:
+"Strategic outline complete: [title] | [X] citations created | [Y] evidence mappings | Outline artifact: [artifact_id]"
+  `,
+  tools: () => [firecrawlMcpTool],
+  artifactComponents: () => [citation, scrapedPage, strategicOutline],
+  canDelegateTo: () => []
+});
+```
+
+**Changes to Content Writer Agent:**
+
+```typescript
+const contentWriter = subAgent({
+  id: 'content-writer',
+  name: 'Content Writer',
+  description: `Writes publication-ready blog articles with proper citations`,
+  prompt: `
+You are a professional blog writer specializing in Smart Brevity framework.
+
+STEP 1: RETRIEVE ALL ARTIFACTS
+You have access to:
+
+STRATEGIC OUTLINE:
+${artifactReference('strategic_outline')}
+
+CITATIONS:
+${artifactReference('citation')}
+
+SCRAPED SOURCE MATERIAL:
+${artifactReference('scraped_page')}
+
+You MUST fetch these artifacts to access:
+- strategic_outline: Full outline with evidenceMap and keyQuotes
+- citation artifacts: All source material referenced in evidenceMap
+- scraped_page: Original content for additional context
+
+STEP 2: WRITE USING SMART BREVITY
+Follow the outline's structure exactly:
+- Use the path specified (how-to, data-analysis, etc.)
+- Hit the target word count (±10%)
+- Follow Smart Brevity formatting rules
+
+STEP 3: INTEGRATE CITATIONS
+For EVERY claim that needs evidence:
+1. Check the outline's evidenceMap for citationIds
+2. Retrieve those citation artifacts
+3. Format citations inline: [Source Title](url)
+4. Add footnote references if appropriate
+
+Example:
+"According to recent data, AI adoption increased 47% in 2024[^1]."
+
+[^1]: [AI Industry Report 2024](https://example.com/report) - Retrieved from citation artifact [citation-id]
+
+STEP 4: QUALITY CHECKLIST
+Before finalizing:
+✓ All evidence claims have citations
+✓ All citationIds from evidenceMap are used
+✓ Word count matches target
+✓ Smart Brevity structure followed
+✓ Meta description included
+✓ All key quotes properly attributed
+
+STEP 5: DELIVER FINAL ARTICLE
+Return the complete markdown article with:
+- Title and meta description
+- Full body content
+- All inline citations
+- Footnote section with full references
+- Word count confirmation
+
+Report to orchestrator:
+"Article complete: [title] | [actual_word_count] words | [X] citations used | Ready for publication"
+  `,
+  tools: () => [firecrawlMcpTool],
+  artifactComponents: () => [citation, scrapedPage, strategicOutline],
+  canDelegateTo: () => []
+});
+```
+
+**Validation:**
+```bash
+# Test full workflow and verify:
+1. Content Strategist creates citation artifacts
+2. Content Writer retrieves and uses citations
+3. Final article has proper citation formatting
+4. All evidenceMap citations are utilized
+```
+
+---
+
+## 📋 PHASE 3: MONITORING & OBSERVABILITY (Do Third)
+**Estimated Time:** 1-2 hours  
+**Risk:** Low - System functional, but harder to debug
+
+### **3.1 Add AI Streaming Failure Monitoring**
+
+**Problem:** Transient AI streaming failures not tracked
+
+**Create new file:** `my-agent-directory/src/projects/blog-generator/utils/error-tracking.ts`
+
+```typescript
+import { Logger } from '@inkeep/agents-sdk';
+
+export interface AIStreamError {
+  timestamp: string;
+  agentId: string;
+  attemptNumber: number;
+  inputTokens: number;
+  outputTokens: number;
+  errorMessage: string;
+  recoveredSuccessfully: boolean;
+}
+
+export class ErrorTracker {
+  private static errors: AIStreamError[] = [];
+  
+  static logAIStreamError(error: AIStreamError): void {
+    this.errors.push(error);
+    
+    // Log to console for immediate visibility
+    Logger.error('AI Stream Error', {
+      agent: error.agentId,
+      attempt: error.attemptNumber,
+      recovered: error.recoveredSuccessfully
+    });
+    
+    // If errors exceed threshold, alert
+    const recentErrors = this.errors.filter(
+      e => Date.now() - new Date(e.timestamp).getTime() < 300000 // 5 min
+    );
+    
+    if (recentErrors.length >= 3) {
+      Logger.warn('High AI stream failure rate detected', {
+        count: recentErrors.length,
+        timeWindow: '5 minutes'
+      });
+    }
+  }
+  
+  static getErrorStats() {
+    return {
+      total: this.errors.length,
+      byAgent: this.errors.reduce((acc, err) => {
+        acc[err.agentId] = (acc[err.agentId] || 0) + 1;
+        return acc;
+      }, {} as Record<string, number>),
+      recoveryRate: this.errors.filter(e => e.recoveredSuccessfully).length / this.errors.length
+    };
+  }
+}
+```
+
+**Update orchestrator to use error tracking:**
+
+```typescript
+import { ErrorTracker } from '../utils/error-tracking';
+
+const orchestrator = subAgent({
+  // ... existing config
+  prompt: `
+${existingPrompt}
+
+ERROR HANDLING:
+If any agent reports streaming failures or timeouts:
+1. Log the error with context
+2. Retry once automatically
+3. If retry fails, report to user and suggest manual retry
+4. Track error patterns for debugging
+  `,
+});
+```
+
+**Validation:**
+- Trigger streaming errors intentionally (rate limiting)
+- Verify errors are logged
+- Check alert triggers at threshold
+
+---
+
+## 📋 PHASE 4: DOCUMENTATION & VALIDATION (Do Fourth)
+**Estimated Time:** 2 hours  
+**Risk:** Low - Quality of life improvement
+
+### **4.1 Document Artifact Usage Patterns**
+
+**Create:** `my-agent-directory/src/projects/blog-generator/artifact-components/README.md`
+
+```markdown
+# Artifact Components Guide
+
+## Overview
+This directory contains artifact definitions for the blog generator workflow.
+
+## Artifact Types
+
+### 1. scraped_page
+**Purpose:** Captures complete Firecrawl scraping results
+**Schema:** NONE (schema-less to capture full tool response)
+**Created by:** `urlToMarkdown` agent
+**Used by:** `qualificationAgent`, `contentStrategistAgent`, `contentWriter`
+
+**Structure (from Firecrawl):**
+```json
+{
+  "success": true,
+  "markdown": "Full page content in markdown...",
+  "metadata": {
+    "title": "Page title",
+    "url": "https://source-url.com",
+    "sourceURL": "https://original-url.com",
+    "statusCode": 200,
+    "ogDescription": "Meta description",
+    ...
+  }
+}
+```
+
+**Usage Example:**
+```typescript
+// Creating (in urlToMarkdown agent):
+<artifact:create 
+  type="scraped_page" 
+  base="result"
+/>
+
+// Retrieving (in downstream agent):
+const scrapedPages = ${artifactReference('scraped_page')};
+const content = scrapedPages[0].markdown;
+const metadata = scrapedPages[0].metadata;
+```
+
+### 2. citation
+**Purpose:** Structured source attribution for claims and evidence
+**Schema:** Strict Zod schema (see citation.ts)
+**Created by:** `contentStrategistAgent`
+**Used by:** `contentWriter`
+
+**Fields:**
+- `title`: Source document title
+- `url`: Source URL
+- `sourceType`: webpage | statistic | quote | data | research
+- `content`: Full source excerpt
+- `relevance`: How source relates to claim
+- `extractedAt`: ISO timestamp
+
+**Usage Example:**
+```typescript
+// Creating:
+<artifact:create 
+  type="citation" 
+  base="source_data"
+  details='{
+    "title": "AI Report 2024",
+    "url": "https://example.com/report",
+    "sourceType": "statistic",
+    "content": "AI adoption increased 47% in Q1 2024",
+    "relevance": "Supports claim about industry growth",
+    "extractedAt": "2025-10-30T12:00:00Z"
+  }'
+/>
+
+// Retrieving:
+const citations = ${artifactReference('citation')};
+const relevantCitation = citations.find(c => c.id === citationId);
+```
+
+### 3. strategic_outline
+**Purpose:** Complete blog outline with evidence mapping
+**Schema:** Strict Zod schema (see strategic-outline.ts)
+**Created by:** `contentStrategistAgent`
+**Used by:** `contentWriter`
+
+**Key Fields:**
+- `outline`: Full Smart Brevity structured outline
+- `evidenceMap`: Array linking claims to citation IDs
+- `keyQuotes`: Array of quotes with citation IDs
+- `path`: Smart Brevity framework path
+- `targetWordCount`: Word count target
+
+**Usage Example:**
+```typescript
+// Creating:
+<artifact:create 
+  type="strategic_outline" 
+  base="outline_object"
+  details='{
+    "title": "Blog Title",
+    "evidenceMap": [
+      {
+        "claim": "AI adoption increased significantly",
+        "citationIds": ["citation-abc-123"],
+        "section": "Why it matters"
+      }
+    ],
+    ...
+  }'
+/>
+
+// Retrieving:
+const outline = ${artifactReference('strategic_outline')}[0];
+const evidenceForSection = outline.evidenceMap.filter(
+  e => e.section === "Why it matters"
+);
+```
+
+## Best Practices
+
+### Schema-less vs Schema-based
+- **Use schema-less when:**
+  - Tool output structure is complex/unknown
+  - You want complete capture without filtering
+  - Downstream agents need full flexibility
+
+- **Use strict schema when:**
+  - You know exact structure needed
+  - You want validation and type safety
+  - Multiple agents need consistent format
+
+### Creating Artifacts
+1. Always create artifacts immediately after tool calls
+2. Use descriptive base references
+3. For schema-based: ensure all required fields are present
+4. For schema-less: capture the complete result object
+
+### Retrieving Artifacts
+1. Always check if artifacts exist before accessing
+2. Use artifact references in prompts: `${artifactReference('type')}`
+3. Handle cases where artifacts might be empty
+4. Filter artifacts by relevance to current task
+
+## Troubleshooting
+
+### "Schema validation failed"
+- Verify your details object matches the Zod schema exactly
+- Check for required fields
+- Ensure field types match (string vs number, etc.)
+
+### "Artifact not found"
+- Verify artifact was created by upstream agent
+- Check artifact type name matches exactly
+- Ensure agent has artifactComponents configured
+
+### "Field not available in artifact"
+- For schema-less: entire tool result is available
+- For schema-based: only defined fields are present
+- Check artifact definition for available fields
+```
+
+### **4.2 Create Testing Checklist**
+
+**Create:** `my-agent-directory/src/projects/blog-generator/TESTING.md`
+
+```markdown
+# Blog Generator Testing Checklist
+
+## Pre-Deployment Testing
+
+### Phase 1: Individual Agent Tests
+- [ ] **urlToMarkdown Agent**
+  - [ ] Successfully scrapes URLs
+  - [ ] Creates scraped_page artifact (schema-less)
+  - [ ] Handles scraping failures gracefully
+  - [ ] Reports back to orchestrator with artifact ID
+
+- [ ] **Qualification Agent**
+  - [ ] Retrieves scraped_page artifact
+  - [ ] Analyzes content correctly
+  - [ ] Either asks questions (Option B) or uses smart defaults (Option A)
+  - [ ] Returns structured qualification data
+
+- [ ] **Content Strategist Agent**
+  - [ ] Retrieves scraped_page artifact
+  - [ ] Creates multiple citation artifacts
+  - [ ] Creates strategic_outline artifact with evidenceMap
+  - [ ] All citations have valid URLs and content
+
+- [ ] **Content Writer Agent**
+  - [ ] Retrieves strategic_outline artifact
+  - [ ] Retrieves all citation artifacts
+  - [ ] Writes content matching target word count
+  - [ ] Includes all citations from evidenceMap
+  - [ ] Formats citations properly
+
+### Phase 2: Integration Tests
+- [ ] **Full Workflow**
+  - [ ] Orchestrator delegates in correct sequence
+  - [ ] No unexpected pauses (if Option A)
+  - [ ] Expected pause at qualification (if Option B)
+  - [ ] All artifacts passed between agents
+  - [ ] Final article is complete and well-formatted
+
+- [ ] **Artifact Flow**
+  - [ ] scraped_page created by urlToMarkdown
+  - [ ] scraped_page accessed by qualification
+  - [ ] scraped_page accessed by strategist
+  - [ ] citations created by strategist
+  - [ ] strategic_outline created by strategist
+  - [ ] citations retrieved by writer
+  - [ ] strategic_outline retrieved by writer
+
+### Phase 3: Error Handling Tests
+- [ ] **Network Issues**
+  - [ ] Handle Firecrawl timeout
+  - [ ] Retry on transient failures
+  - [ ] Report permanent failures
+
+- [ ] **AI Streaming Failures**
+  - [ ] Logged and tracked
+  - [ ] Automatic retry attempted
+  - [ ] Alert triggered at threshold
+
+- [ ] **Invalid URLs**
+  - [ ] Graceful error message
+  - [ ] Workflow stops appropriately
+  - [ ] Clear user guidance
+
+### Phase 4: Content Quality Tests
+- [ ] **Citation Accuracy**
+  - [ ] All claims have citations
+  - [ ] Citation URLs are valid
+  - [ ] Citation content matches claim
+
+- [ ] **Smart Brevity Compliance**
+  - [ ] Correct path used
+  - [ ] Word count within ±10% of target
+  - [ ] Structure matches framework
+
+- [ ] **Readability**
+  - [ ] Clear section headings
+  - [ ] Logical flow
+  - [ ] No placeholder text
+  - [ ] Professional tone
+
+## Test URLs
+Use these URLs for different content types:
+
+- **How-to:** https://paulgraham.com/todo.html
+- **Data-heavy:** [Insert data-rich article]
+- **Opinion:** [Insert opinion piece]
+- **Technical:** [Insert technical doc]
+- **Product:** [Insert product announcement]
+
+## Success Criteria
+A successful test must:
+1. Complete full workflow without errors
+2. Create all expected artifacts
+3. Produce publication-ready content
+4. Include accurate citations
+5. Match word count target
+6. Follow Smart Brevity structure
+```
+
+---
+
+## 📋 PHASE 5: OPTIMIZATION (Do Last)
+**Estimated Time:** 2-3 hours  
+**Risk:** Low - Polish and performance
+
+### **5.1 Add Artifact Caching Strategy**
+
+**Problem:** Repeated artifact retrievals are inefficient
+
+**Create:** `my-agent-directory/src/projects/blog-generator/utils/artifact-cache.ts`
+
+```typescript
+export class ArtifactCache {
+  private static cache = new Map<string, any>();
+  private static ttl = 300000; // 5 minutes
+  
+  static set(key: string, value: any): void {
+    this.cache.set(key, {
+      value,
+      timestamp: Date.now()
+    });
+  }
+  
+  static get(key: string): any | null {
+    const cached = this.cache.get(key);
+    if (!cached) return null;
+    
+    // Check if expired
+    if (Date.now() - cached.timestamp > this.ttl) {
+      this.cache.delete(key);
+      return null;
+    }
+    
+    return cached.value;
+  }
+  
+  static clear(): void {
+    this.cache.clear();
+  }
+}
+```
+
+### **5.2 Add Performance Metrics**
+
+**Update orchestrator prompt:**
+
+```typescript
+const orchestrator = subAgent({
+  // ... existing config
+  prompt: `
+${existingPrompt}
+
+PERFORMANCE TRACKING:
+Track and report these metrics:
+- Total workflow time
+- Time per agent
+- Number of artifacts created
+- Number of tool calls
+- Token usage per agent
+
+Report summary at workflow completion:
+"Workflow complete in [X]s | Agents: [list] | Artifacts: [count] | Tokens: [total]"
+  `,
+});
+```
+
+---
+
+## 📊 IMPLEMENTATION SUMMARY
+
+### Time Estimates
+| Phase | Time | Priority |
+|-------|------|----------|
+| Phase 1: Critical Fixes | 2-3 hrs | 🔴 CRITICAL |
+| Phase 2: Artifact Retrieval | 3-4 hrs | 🟡 HIGH |
+| Phase 3: Monitoring | 1-2 hrs | 🟢 MEDIUM |
+| Phase 4: Documentation | 2 hrs | 🟢 MEDIUM |
+| Phase 5: Optimization | 2-3 hrs | ⚪ LOW |
+| **TOTAL** | **10-14 hrs** | |
+
+### Rollout Strategy
+
+**Week 1:**
+- Day 1-2: Phase 1 (Critical fixes)
+- Day 3-4: Phase 2 (Artifact retrieval)
+- Day 5: Testing and validation
+
+**Week 2:**
+- Day 1: Phase 3 (Monitoring)
+- Day 2: Phase 4 (Documentation)
+- Day 3-4: Phase 5 (Optimization)
+- Day 5: Final testing and deployment
+
+### Success Metrics
+- ✅ Zero schema validation errors
+- ✅ 100% artifact retrieval success rate
+- ✅ < 5% AI streaming failure rate
+- ✅ Workflow completes in < 90 seconds
+- ✅ All citations properly formatted
+- ✅ Content quality scores > 8/10
+
+---
+
+## 🚀 READY TO START?
+
+**Recommended approach:**
+1. Start with **Phase 1.1** (fix schema-less artifact)
+2. Choose **Option A or B** for workflow design
+3. Test each fix before moving to next phase
+4. Deploy incrementally with rollback plan
+
+Would you like me to start implementing Phase 1.1 now?

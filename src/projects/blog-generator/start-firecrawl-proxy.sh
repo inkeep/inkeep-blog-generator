@@ -14,3 +14,4 @@ export FIRECRAWL_API_KEY="fc-a714655fe4e94a0086be8c2c7d5bf759"
 # Start the proxy
 mcp-proxy --port 4000 --shell "npx -y firecrawl-mcp"
 
+
