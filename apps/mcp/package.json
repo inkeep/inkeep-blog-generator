@@ -11,7 +11,7 @@
     "devDependencies": {
       "@types/node": "24.9.2",
       "@types/react": "19.2.2",
-      "mcp-handler": "^1.0.3",
+      "mcp-handler": "^1.0.4",
       "next": "^16.0.7",
       "typescript": "5.9.3"
     },
